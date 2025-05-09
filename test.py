@@ -1,4 +1,5 @@
 import os
+
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -12,7 +13,8 @@ import torch.nn.functional as F
 
 from new_model import MultiResolutionRegNet
 from data_loader import MedicalImageDataset
-from utils import load_checkpoint, save_image, compute_dice_score, apply_colormap, visualize_flow, gray_to_3channel
+from utils import load_checkpoint, save_image, compute_dice_score, apply_colormap, visualize_flow, gray_to_3channel, \
+    visualize_deformation_fields, create_rainbow_flow_visualization, enhanced_flow_visualization
 
 
 def compute_ssim(x, y, window_size=11, size_average=True):
@@ -308,8 +310,10 @@ def test(config):
     参数:
         config: 测试配置字典
     """
-    # 创建保存目录
+    # 创建保存目录 - 为彩色变形场可视化创建一个专门的目录
     os.makedirs(config['result_dir'], exist_ok=True)
+    enhanced_viz_dir = os.path.join(config['result_dir'], 'enhanced_flow_viz')
+    os.makedirs(enhanced_viz_dir, exist_ok=True)
 
     # 设置设备
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -324,7 +328,8 @@ def test(config):
     print(f"模型加载完成，最佳损失: {best_loss}")
     model.eval()
 
-    # 数据变换 - 修改为单通道灰度图像的归一化
+    # 创建测试数据集和数据加载器
+    # ... 保持原有代码不变 ...
     import torchvision.transforms as transforms
     transform = transforms.Compose([
         transforms.Resize((128, 128)),
@@ -372,12 +377,10 @@ def test(config):
 
             # 正确提取文件名
             if isinstance(filenames, list) and len(filenames) == 3:
-                # 预期格式: [['file1.png'], ['file2.png'], ['file3.png']]
                 ct_name = filenames[0][0] if len(filenames[0]) > 0 else "unknown"
                 mri_name = filenames[1][0] if len(filenames[1]) > 0 else "unknown"
                 deformed_mri_name = filenames[2][0] if len(filenames[2]) > 0 else "unknown"
             elif isinstance(filenames, tuple) and len(filenames) == 3:
-                # 预期格式: (['file1.png'], ['file2.png'], ['file3.png'])
                 ct_name = filenames[0][0] if len(filenames[0]) > 0 else "unknown"
                 mri_name = filenames[1][0] if len(filenames[1]) > 0 else "unknown"
                 deformed_mri_name = filenames[2][0] if len(filenames[2]) > 0 else "unknown"
@@ -403,36 +406,40 @@ def test(config):
             flow_field = outputs['flow_lvl0']
 
             # 计算指标
-            # 1. Dice系数
+            # ... 保持原有的评估计算代码不变 ...
             dice = compute_dice_score(registered_mri, mri_imgs)
             dice_scores.append(dice)
-
-            # 2. 95%豪斯多夫距离 (Hd95)
             hd95 = compute_hd95(registered_mri, mri_imgs)
             hd95_values.append(hd95)
-
-            # 3. 目标配准误差
             tre, num_points = compute_target_registration_error(registered_mri, mri_imgs)
             target_registration_errors.append(tre)
-
-            # 4. 结构相似性指数
             ssim = compute_ssim(registered_mri, mri_imgs)
             ssim_values.append(ssim)
-
-            # 5. 雅可比行列式小于等于0的比例
             fold_percentage = compute_jacobian_fold_percentage(flow_field)
             jacobian_folds.append(fold_percentage)
 
-            # 获取变形场可视化（彩色）
-            flow_viz = visualize_flow(flow_field[0].cpu())
+            # =================== 新增彩色变形场可视化 ===================
+            # 1. 创建彩虹型变形场可视化（使用白色、黄色和青色的等高线）
+            rainbow_flow = create_rainbow_flow_visualization(flow_field, background_img=ct_imgs[0].cpu())
+            rainbow_flow_tensor = torch.from_numpy(rainbow_flow.transpose(2, 0, 1) / 255.0).float()
 
-            # 转换单通道图像为三通道灰度图像
+            # 2. 创建多种增强的变形场可视化
+            # 定义要生成的可视化类型
+            viz_types = ['hsv', 'magnitude', 'quiver', 'jacobian', 'contour', 'divergence', 'curl']
+            # 使用CT图像作为背景
+            enhanced_viz = enhanced_flow_visualization(
+                flow_field,
+                output_types=viz_types,
+                background_img=ct_imgs[0].cpu()
+            )
+
+            # 转换单通道图像为三通道灰度图像（用于合成可视化）
             ct_3ch = gray_to_3channel(ct_imgs[0].cpu())
             deformed_mri_3ch = gray_to_3channel(deformed_mri_imgs[0].cpu())
             registered_mri_3ch = gray_to_3channel(registered_mri[0].cpu())
             mri_3ch = gray_to_3channel(mri_imgs[0].cpu())
 
-            # 保存三通道灰度可视化
+            # 3. 保存主要结果图像，使用彩虹型变形场可视化
             color_save_path = os.path.join(config['result_dir'], f"test_sample_{i}_3ch_gray.png")
             save_image(
                 imgs=[
@@ -440,9 +447,9 @@ def test(config):
                     deformed_mri_3ch,
                     registered_mri_3ch,
                     mri_3ch,
-                    flow_viz  # 流场保持彩色
+                    rainbow_flow_tensor  # 使用彩虹型变形场可视化替代原来的flow_viz
                 ],
-                titles=['CT', 'Deformed MRI', 'Registered MRI', 'Ground Truth MRI', 'Deformation Field'],
+                titles=['CT', 'Deformed MRI', 'Registered MRI', 'Ground Truth MRI', 'Rainbow Deformation Field'],
                 save_path=color_save_path,
                 use_3ch_gray=False  # 已经转换为3通道，不需要再次转换
             )
@@ -455,14 +462,65 @@ def test(config):
                     deformed_mri_imgs[0].cpu(),
                     registered_mri[0].cpu(),
                     mri_imgs[0].cpu(),
-                    flow_viz  # 流场保持彩色
+                    rainbow_flow_tensor  # 使用彩虹型变形场可视化
                 ],
-                titles=['CT', 'Deformed MRI', 'Registered MRI', 'Ground Truth MRI', 'Deformation Field'],
+                titles=['CT', 'Deformed MRI', 'Registered MRI', 'Ground Truth MRI', 'Rainbow Deformation Field'],
                 save_path=gray_save_path,
                 cmap='gray'
             )
 
-            # 额外保存一个只包含MRI相关图像的对比图（三通道灰度）
+            # 4. 保存各种增强的变形场可视化 - 分别保存每种类型
+            for viz_type, viz_img in enhanced_viz.items():
+                # 将numpy数组转换为PyTorch张量
+                viz_tensor = torch.from_numpy(viz_img.transpose(2, 0, 1) / 255.0).float()
+
+                # 保存该类型的可视化
+                viz_save_path = os.path.join(enhanced_viz_dir, f"test_sample_{i}_{viz_type}.png")
+                save_image(
+                    imgs=[viz_tensor],
+                    titles=[f"{viz_type.capitalize()} Visualization"],
+                    save_path=viz_save_path,
+                    use_3ch_gray=False  # 已经是RGB图像
+                )
+
+            # 5. 创建一个组合显示所有可视化类型的图像
+            # 首先定义一个函数来将图像调整为相同大小并排布
+            def create_grid_image(images_dict, rows=2):
+                # 确定总的图像数量和每行的图像数量
+                num_images = len(images_dict)
+                cols = int(np.ceil(num_images / rows))
+
+                # 获取所有图像的高度和宽度
+                sample_img = list(images_dict.values())[0]
+                H, W = sample_img.shape[:2]
+
+                # 创建空白画布
+                grid_img = np.ones((H * rows, W * cols, 3), dtype=np.uint8) * 255
+
+                # 将图像放置到网格中
+                for idx, (name, img) in enumerate(images_dict.items()):
+                    r, c = idx // cols, idx % cols
+                    if img.shape[2] == 4:  # RGBA图像
+                        img = img[:, :, :3]  # 丢弃alpha通道
+                    grid_img[r * H:(r + 1) * H, c * W:(c + 1) * W, :] = img
+
+                    # 添加标题
+                    cv2.putText(grid_img, name.capitalize(), (c * W + 10, r * H + 30),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+
+                return grid_img
+
+            # 创建组合图像并保存
+            combined_viz = create_grid_image(enhanced_viz)
+            combined_save_path = os.path.join(enhanced_viz_dir, f"test_sample_{i}_combined_viz.png")
+            plt.figure(figsize=(15, 10))
+            plt.imshow(combined_viz)
+            plt.axis('off')
+            plt.tight_layout()
+            plt.savefig(combined_save_path, dpi=150, bbox_inches='tight')
+            plt.close()
+
+            # 6. 额外保存一个只包含MRI相关图像的对比图（三通道灰度）
             mri_compare_path = os.path.join(config['result_dir'], f"test_sample_{i}_mri_compare.png")
             save_image(
                 imgs=[
@@ -478,7 +536,8 @@ def test(config):
             print(
                 f"样本 {i} (CT={ct_name}, MRI={mri_name}, 形变MRI={deformed_mri_name}): DICE={dice:.4f}, HD95={hd95:.4f} mm, TRE={tre:.4f} mm, SSIM={ssim:.4f}, Fold%={fold_percentage:.4f}%")
 
-    # 计算并打印平均指标
+    # 计算并打印平均指标 - 保持不变
+    # ... 保持原有的代码不变 ...
     avg_dice = np.mean(dice_scores)
     avg_hd95 = np.mean(hd95_values)
     avg_tre = np.mean(target_registration_errors)
@@ -496,6 +555,7 @@ def test(config):
     print(f"平均HD95: {avg_hd95:.4f} ± {std_hd95:.4f} mm")
     print(f"平均目标配准误差: {avg_tre:.4f} ± {std_tre:.4f} mm")
     print(f"平均SSIM: {avg_ssim:.4f} ± {std_ssim:.4f}")
+    print(f"平均雅可比折叠百分比: {avg_fold:.4f} ± {std_fold:.4f}%")
 
     # 保存指标为CSV文件
     import csv
@@ -519,16 +579,18 @@ def test(config):
         writer.writerow(['Std', '', '', '', std_dice, std_hd95, std_tre, std_ssim, std_fold])
 
     print(f"指标已保存到 {csv_path}")
+    print(f"增强的变形场可视化已保存到 {enhanced_viz_dir}")
 
 
 if __name__ == "__main__":
     # 测试配置
     config = {
         'data_dir': './0426_data',  # 数据集根目录
-        'result_dir': './new_test_results',  # 结果保存目录
+        'result_dir': './enhanced_test_results',  # 结果保存目录
         'checkpoint_path': './0426_new_checkpoints/best_model.pth',  # 训练好的模型路径
         'num_workers': 4  # 数据加载的工作线程数
     }
+
 
     # 开始测试
     test(config)

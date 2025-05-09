@@ -215,7 +215,7 @@ if __name__ == "__main__":
     generate_deformed_images(
         input_folder=input_folder,
         output_folder=output_folder,
-        num_images_per_original=5,  # 每张原图生成5张形变图像
+        num_images_per_original=50,  # 每张原图生成5张形变图像
         elastic_alpha_range=(10, 50),  # 显著降低弹性形变强度
         elastic_sigma_range=(12, 16),  # 增加平滑程度
         affine_rotation_range=(1, 2),  # 减小旋转角度
