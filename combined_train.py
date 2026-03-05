@@ -378,7 +378,7 @@ def save_beautiful_result(fixed, moving, warped, flow, pid, sid, source,
     if flow_np.ndim == 4:
         flow_np = flow_np[0]
 
-    fig, axes = plt.subplots(2, 4, figsize=(18, 9),
+    fig, axes = plt.subplots(2, 4, figsize=(22, 11),
                               gridspec_kw={'hspace': 0.28, 'wspace': 0.12})
 
     # Row 1
@@ -426,7 +426,7 @@ def save_beautiful_result(fixed, moving, warped, flow, pid, sid, source,
     )
 
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    plt.savefig(save_path, dpi=180, bbox_inches='tight', facecolor='white', edgecolor='none')
+    plt.savefig(save_path, dpi=250, bbox_inches='tight', facecolor='white', edgecolor='none')
     plt.close(fig)
 
 
@@ -924,8 +924,12 @@ if __name__ == "__main__":
     # ============ 第三步: 训练 ============
     print("\n【第三步】联合训练 SelectiveSSM-LTMNet\n")
 
-    # 64x64 大幅减少 GPU 内存占用 (相比 128x128 约省 4 倍)
-    IMG_SIZE = 64
+    # ---- RTX 4060 (8GB) 全速配置 ----
+    IMG_SIZE = 128        # 128×128 清晰度足够论文使用
+    TRAIN_BS = 8          # 4060 可轻松支持
+    VAL_BS = 4
+    NUM_WORKERS = 4       # 多进程数据加载加速
+
     transform = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.ToTensor(),
@@ -935,14 +939,11 @@ if __name__ == "__main__":
     train_dataset = CombinedPairedDataset(train_pairs, transform=transform)
     val_dataset = CombinedPairedDataset(val_pairs, transform=transform)
 
-    # MPS 不支持 pin_memory
     use_pin = device.type == 'cuda'
-    TRAIN_BS = 1   # batch=1，通过梯度累积模拟更大 batch
-    VAL_BS = 1
     train_loader = DataLoader(train_dataset, batch_size=TRAIN_BS, shuffle=True,
-                              num_workers=0, pin_memory=use_pin)
+                              num_workers=NUM_WORKERS, pin_memory=use_pin)
     val_loader = DataLoader(val_dataset, batch_size=VAL_BS, shuffle=False,
-                            num_workers=0, pin_memory=use_pin)
+                            num_workers=NUM_WORKERS, pin_memory=use_pin)
 
     print(f"训练: {len(train_dataset)} 样本, {len(train_loader)} 批次")
     print(f"验证: {len(val_dataset)} 样本, {len(val_loader)} 批次")
@@ -989,13 +990,14 @@ if __name__ == "__main__":
     print(f"\n模型参数: {total_params:,}")
 
     print(f"\n训练配置:")
+    print(f"  设备: {device} (RTX 4060 CUDA 全速模式)")
     print(f"  Epochs: {config['num_epochs']} (从 Epoch {start_epoch+1} 开始)")
     print(f"  图像尺寸: {IMG_SIZE}×{IMG_SIZE}")
     print(f"  Batch size: {TRAIN_BS} (梯度累积×{GRAD_ACCUM_STEPS}, 等效 batch={TRAIN_BS*GRAD_ACCUM_STEPS})")
     print(f"  学习率: 5e-5 (Cosine 退火, 微调模式)")
     print(f"  损失: NMI + MIND + Smooth (α=10.0, β=0.5)")
     print(f"  验证频率: 每 {config['val_frequency']} epoch")
-    print(f"  OOM保护: 连续5次OOM自动降级CPU")
+    print(f"  num_workers: {NUM_WORKERS}, pin_memory: {use_pin}")
     print(f"  输出: {OUTPUT_DIR}\n")
 
     start_time = time.time()
