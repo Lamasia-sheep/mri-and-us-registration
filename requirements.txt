@@ -1,0 +1,22 @@
+# 深度学习框架
+torch>=2.0.0
+torchvision>=0.15.0
+
+# 数值计算
+numpy>=2.0.0
+scipy>=1.10.0
+
+# 机器学习和图像处理
+scikit-learn>=1.0.0
+scikit-image>=0.20.0
+
+# 图像处理
+opencv-python>=4.0.0
+Pillow>=9.0.0
+
+# 可视化
+matplotlib>=3.5.0
+
+# 工具库
+tqdm>=4.60.0
+tensorboard>=2.10.0

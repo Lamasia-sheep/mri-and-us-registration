@@ -1,0 +1,55 @@
+# 图片文件
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.tif
+
+# 模型权重/检查点
+*.pth
+*.pt
+*.ckpt
+*.h5
+*.hdf5
+
+# 医学影像数据
+*.mnc
+*.nii
+*.nii.gz
+*.dcm
+
+# 数据目录
+RESECT-MINC-1-13/
+RESECT-MINC-14-27/
+resect_png/
+group2 - png/
+0426_data/
+
+# 输出/结果目录
+bite_output/
+bite_output_v2/
+bite_train_output/
+combined_train_output/
+new_test_results/
+test_results/
+results_section32/
+figures/
+0426_checkpoints/
+0426_new_checkpoints/
+
+# 日志
+*.log
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/

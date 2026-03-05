@@ -639,7 +639,7 @@ def visualize_flow(flow_field, convert_to_rgb=True):
         return torch.from_numpy(hsv.transpose(2, 0, 1)).float()
 
 
-def save_checkpoint(state, is_best, save_path):
+def save_checkpoint(state, is_best, save_path, filename='checkpoint.pth'):
     """
     保存检查点
 
@@ -647,8 +647,10 @@ def save_checkpoint(state, is_best, save_path):
         state: 包含模型状态等的字典
         is_best: 是否是最佳模型
         save_path: 保存路径
+        filename: 检查点文件名 (默认 checkpoint.pth)
     """
-    checkpoint_path = os.path.join(save_path, 'checkpoint.pth')
+    os.makedirs(save_path, exist_ok=True)
+    checkpoint_path = os.path.join(save_path, filename)
     torch.save(state, checkpoint_path)
 
     if is_best:
