@@ -43,8 +43,13 @@ def compute_content_ratio(img_path, threshold=15):
     return (img > threshold).sum() / img.size
 
 
-def compute_mutual_info(img1, img2, bins=32):
-    """计算两张图像的互信息"""
+def compute_mutual_info(img1, img2, bins=32, resize_to=(128, 128)):
+    """计算两张图像的互信息（先统一尺寸，避免原始分辨率不一致）"""
+    if resize_to is not None:
+        if img1.shape != resize_to:
+            img1 = np.array(Image.fromarray(img1.astype(np.uint8)).resize(resize_to, Image.BILINEAR))
+        if img2.shape != resize_to:
+            img2 = np.array(Image.fromarray(img2.astype(np.uint8)).resize(resize_to, Image.BILINEAR))
     hist_2d, _, _ = np.histogram2d(img1.flatten(), img2.flatten(), bins=bins)
     pxy = hist_2d / (hist_2d.sum() + 1e-10)
     px = pxy.sum(axis=1)
@@ -58,7 +63,7 @@ def compute_mutual_info(img1, img2, bins=32):
 # ==================== RESECT 配对 ====================
 
 def pair_resect_dataset(resect_root, content_threshold=0.10,
-                        max_pairs_per_case=80, seed=42):
+                        max_pairs_per_case=60, local_search_window=6, mi_threshold=0.02):
     """
     RESECT 数据集配对:
     - MRI_T1 为 fixed, US_before 为 moving
@@ -69,7 +74,6 @@ def pair_resect_dataset(resect_root, content_threshold=0.10,
     print("RESECT 数据集配对 (MRI_T1 ↔ US_before)")
     print("=" * 60)
 
-    rng = random.Random(seed)
     all_pairs = []
 
     cases = sorted([d for d in os.listdir(resect_root)
@@ -107,44 +111,44 @@ def pair_resect_dataset(resect_root, content_threshold=0.10,
             print(f"  [跳过] {case}: 有效切片不足 (T1={len(valid_t1)}, US={len(valid_us)})")
             continue
 
-        # 按比例位置配对: MRI 第 i/N 位置 ↔ US 第 i/M 位置
-        # 然后随机打散补充到 max_pairs_per_case
+        # 按比例位置粗配 + 局部窗口内 MI 最优细配
         case_pairs = []
         n_t1, n_us = len(valid_t1), len(valid_us)
         n_proportional = min(n_t1, n_us, max_pairs_per_case)
 
         for k in range(n_proportional):
             t1_idx = int(k * n_t1 / n_proportional)
-            us_idx = int(k * n_us / n_proportional)
+            us_center = int(k * n_us / n_proportional)
             t1_path = valid_t1[t1_idx]
-            us_path = valid_us[us_idx]
+
+            # 在局部窗口中选 MI 最高的 US 切片，降低错配概率
+            best_us_path = None
+            best_mi = -1e9
+            left = max(0, us_center - local_search_window)
+            right = min(n_us - 1, us_center + local_search_window)
+
+            t1_img = np.array(Image.open(t1_path).convert('L'))
+            for us_idx in range(left, right + 1):
+                us_path_cand = valid_us[us_idx]
+                us_img = np.array(Image.open(us_path_cand).convert('L'))
+                mi_val = compute_mutual_info(t1_img, us_img, bins=32, resize_to=(128, 128))
+                if mi_val > best_mi:
+                    best_mi = mi_val
+                    best_us_path = us_path_cand
+
+            if best_us_path is None or best_mi < mi_threshold:
+                continue
+
             t1_slice = int(os.path.basename(t1_path).replace('.png', ''))
-            us_slice = int(os.path.basename(us_path).replace('.png', ''))
+            us_slice = int(os.path.basename(best_us_path).replace('.png', ''))
 
             case_pairs.append({
                 'patient_id': case,
                 'slice_idx': f"T{t1_slice}_U{us_slice}",
                 'mr_path': t1_path,
-                'us_path': us_path,
+                'us_path': best_us_path,
                 'source': 'RESECT'
             })
-
-        # 补充随机配对 (如果还没到 max_pairs_per_case)
-        while len(case_pairs) < max_pairs_per_case and len(case_pairs) < n_t1 * n_us:
-            t1_path = rng.choice(valid_t1)
-            us_path = rng.choice(valid_us)
-            t1_s = int(os.path.basename(t1_path).replace('.png', ''))
-            us_s = int(os.path.basename(us_path).replace('.png', ''))
-            key = f"T{t1_s}_U{us_s}"
-            # 避免重复
-            if not any(p['slice_idx'] == key and p['patient_id'] == case for p in case_pairs):
-                case_pairs.append({
-                    'patient_id': case,
-                    'slice_idx': key,
-                    'mr_path': t1_path,
-                    'us_path': us_path,
-                    'source': 'RESECT'
-                })
 
         all_pairs.extend(case_pairs)
         print(f"  {case}: {len(case_pairs)} 配对 (T1={n_t1}, US={n_us} 有效切片)")
@@ -155,7 +159,7 @@ def pair_resect_dataset(resect_root, content_threshold=0.10,
 
 # ==================== BITE 配对 ====================
 
-def pair_bite_dataset(bite_root, content_threshold=0.10, mi_threshold=0.0):
+def pair_bite_dataset(bite_root, content_threshold=0.10, mi_threshold=0.03):
     """
     BITE 数据集配对 (切片索引对齐):
     - MR 为 fixed, US 为 moving
@@ -194,6 +198,12 @@ def pair_bite_dataset(bite_root, content_threshold=0.10, mi_threshold=0.0):
             us_ratio = compute_content_ratio(us_path)
 
             if mr_ratio < content_threshold or us_ratio < content_threshold:
+                continue
+
+            mr_img = np.array(Image.open(mr_path).convert('L'))
+            us_img = np.array(Image.open(us_path).convert('L'))
+            mi_val = compute_mutual_info(mr_img, us_img, bins=32, resize_to=(128, 128))
+            if mi_val < mi_threshold:
                 continue
 
             patient_pairs.append({
@@ -855,9 +865,18 @@ if __name__ == "__main__":
     print("【第一步】配对 RESECT + BITE 数据")
     print("=" * 60 + "\n")
 
-    resect_pairs = pair_resect_dataset(RESECT_ROOT, content_threshold=0.10,
-                                        max_pairs_per_case=80)
-    bite_pairs = pair_bite_dataset(BITE_ROOT, content_threshold=0.10)
+    resect_pairs = pair_resect_dataset(
+        RESECT_ROOT,
+        content_threshold=0.10,
+        max_pairs_per_case=50,
+        local_search_window=6,
+        mi_threshold=0.02
+    )
+    bite_pairs = pair_bite_dataset(
+        BITE_ROOT,
+        content_threshold=0.10,
+        mi_threshold=0.03
+    )
 
     all_pairs = resect_pairs + bite_pairs
     random.Random(42).shuffle(all_pairs)

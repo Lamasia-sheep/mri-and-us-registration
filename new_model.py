@@ -286,7 +286,9 @@ class SpatialTransformer(nn.Module):
         grid = grid + flow
 
         # 使用grid_sample进行采样
-        warped_img = F.grid_sample(img, grid, mode='bilinear', padding_mode='border', align_corners=True)
+        # MPS 不支持 'border'，改用 'zeros'（医学图像边界外填充黑色背景合理）
+        padding_mode = 'zeros' if device.type == 'mps' else 'border'
+        warped_img = F.grid_sample(img, grid, mode='bilinear', padding_mode=padding_mode, align_corners=True)
 
         return warped_img
 
